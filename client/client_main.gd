@@ -3,6 +3,7 @@ extends Node
 ## first-person camera. Reads SIM state; never writes it.
 
 const CameraRig := preload("res://client/camera_rig.gd")
+const Fx := preload("res://client/fx.gd")
 
 const LOCAL_ID := "p1"
 
@@ -11,6 +12,7 @@ const LOCAL_ID := "p1"
 
 var rig: Node3D
 var camera: Camera3D
+var fx: Node3D
 var yaw := 0.0
 var pitch := 0.0
 
@@ -37,6 +39,11 @@ func _build_camera() -> void:
 	camera.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	rig.add_child(camera)
 	get_parent().add_child.call_deferred(rig)
+	fx = Fx.new()
+	fx.sim = sim
+	fx.camera = camera
+	fx.local_id = LOCAL_ID
+	get_parent().add_child.call_deferred(fx)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -83,6 +90,8 @@ func _weapon_choice() -> int:
 
 
 func _on_sim_event(ev: Dictionary) -> void:
+	if fx != null:
+		fx.handle(ev)
 	match ev["type"]:
 		"spawn":
 			if ev["id"] == LOCAL_ID and rig != null:

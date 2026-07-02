@@ -62,12 +62,111 @@ func _run() -> void:
 
 	await _movement_checks(arena)
 
+	await _weapon_checks(arena)
+
 	arena.queue_free()
 	await process_frame
 	await process_frame
 	await _match_scene_check()
 
 	print("=== smoke: %s ===" % ("FAIL (%d)" % _fails if _fails > 0 else "PASS"))
+
+
+func _weapon_checks(arena: Node3D) -> void:
+	print("=== smoke: weapons ===")
+	var sim: Node3D = (load("res://sim/sim_world.gd") as GDScript).new()
+	root.add_child(sim)
+	sim.setup(arena)
+	sim.add_player("a", "Attacker", true)
+	sim.add_player("b", "Target", true)
+	var a: RefCounted = sim.get_player("a")
+	var b: RefCounted = sim.get_player("b")
+
+	# face A at B, 6 m apart on open floor, and settle
+	a.body.global_position = Vector3(10, 1.0, -2)
+	b.body.global_position = Vector3(10, 1.0, -8)
+	sim.set_intent("a", _idle_intent())
+	sim.set_intent("b", _idle_intent())
+	for i in 10:
+		await physics_frame
+
+	# hitscan: fire the Pulse Rifle for ~0.5 s (yaw 0 faces -Z)
+	var fire := _idle_intent()
+	fire["fire"] = true
+	sim.set_intent("a", fire)
+	for i in 30:
+		await physics_frame
+	sim.set_intent("a", _idle_intent())
+	_expect(b.health < 100, "hitscan damaged target (hp %d)" % b.health)
+	_expect(a.ammo[0] < 100, "hitscan spent ammo (%d left)" % a.ammo[0])
+	var saw_fire := false
+	for ev: Dictionary in sim.drain_events():
+		if ev["type"] == "fire" and ev["id"] == "a":
+			saw_fire = true
+	_expect(saw_fire, "fire event emitted")
+
+	# weapon switch lock
+	var sw := _idle_intent()
+	sw["weapon"] = 1
+	sim.set_intent("a", sw)
+	await physics_frame
+	_expect(a.weapon == 1, "switched to Thumper")
+	_expect(a.cooldown > 0.0, "switch lock applied")
+
+	# rocket: B repositioned, A fires one rocket; expect travel then splash/direct hit
+	b.health = 100
+	b.velocity = Vector3.ZERO
+	b.body.global_position = Vector3(10, 1.0, -10)
+	for i in 20:
+		await physics_frame  # let switch lock expire, B settle
+	var hp_before: int = b.health
+	fire = _idle_intent()
+	fire["weapon"] = 1
+	fire["fire"] = true
+	sim.set_intent("a", fire)
+	await physics_frame
+	await physics_frame
+	sim.set_intent("a", _idle_intent())
+	_expect(sim.get_projectiles().size() >= 1, "rocket in flight")
+	var saw_explosion := false
+	var b_peak_vel := 0.0
+	for i in 60:
+		await physics_frame
+		b_peak_vel = maxf(b_peak_vel, b.velocity.length())
+		for ev: Dictionary in sim.drain_events():
+			if ev["type"] == "explosion":
+				saw_explosion = true
+	_expect(saw_explosion, "rocket exploded")
+	_expect(b.health <= hp_before - 50, "rocket hurt target (hp %d -> %d)" % [hp_before, b.health])
+	_expect(b_peak_vel > 1.0, "rocket knockback applied (peak %.1f m/s)" % b_peak_vel)
+
+	# rocket jump: aim straight down, fire, expect strong upward launch + self damage
+	a.health = 100
+	a.velocity = Vector3.ZERO
+	a.body.global_position = Vector3(-10, 1.0, 2)
+	a.cooldown = 0.0
+	for i in 10:
+		await physics_frame
+	var rj := _idle_intent()
+	rj["pitch"] = -PI / 2 + 0.02
+	rj["fire"] = true
+	rj["jump"] = true
+	sim.set_intent("a", rj)
+	var max_vy := -99.0
+	for i in 30:
+		await physics_frame
+		max_vy = maxf(max_vy, a.velocity.y)
+	sim.set_intent("a", _idle_intent())
+	_expect(max_vy > 9.0, "rocket jump vertical boost %.1f m/s" % max_vy)
+	_expect(a.health < 100 and a.alive, "rocket jump cost health (%d), survivable" % a.health)
+
+	sim.queue_free()
+	await process_frame
+
+
+func _idle_intent() -> Dictionary:
+	return {"move": Vector2.ZERO, "yaw": 0.0, "pitch": 0.0,
+		"jump": false, "crouch": false, "fire": false, "weapon": -1}
 
 
 func _match_scene_check() -> void:
