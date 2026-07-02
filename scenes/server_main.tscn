@@ -1,0 +1,9 @@
+[gd_scene load_steps=3 format=3 uid="uid://c3servermain01"]
+
+[ext_resource type="PackedScene" path="res://scenes/arena.tscn" id="1"]
+[ext_resource type="Script" path="res://scenes/server_main.gd" id="2"]
+
+[node name="ServerMain" type="Node3D"]
+script = ExtResource("2")
+
+[node name="Arena" parent="." instance=ExtResource("1")]

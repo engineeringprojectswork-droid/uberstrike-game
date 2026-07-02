@@ -25,6 +25,8 @@ func _ready() -> void:
 		await arena.ready_for_match
 	sim.setup(arena, {"frag_limit": GameConfig.frag_limit})
 	sim.add_player(LOCAL_ID, "You", false)
+	for i in GameConfig.bot_count:
+		sim.add_bot(GameConfig.difficulty)
 	var p: RefCounted = sim.get_player(LOCAL_ID)
 	yaw = p.yaw
 	pitch = p.pitch

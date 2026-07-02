@@ -65,6 +65,7 @@ func _run() -> void:
 	await _weapon_checks(arena)
 
 	await _combat_loop_checks(arena)
+	await _bot_checks(arena)
 
 	arena.queue_free()
 	await process_frame
@@ -245,6 +246,44 @@ func _combat_loop_checks(arena: Node3D) -> void:
 	_expect(end_scores.size() == 2 and end_scores[0]["id"] == "a" and end_scores[0]["frags"] == 2,
 		"scores sorted, winner 'a' with 2 frags")
 
+	sim.queue_free()
+	await process_frame
+
+
+func _bot_checks(arena: Node3D) -> void:
+	print("=== smoke: bots ===")
+	var sim: Node3D = (load("res://sim/sim_world.gd") as GDScript).new()
+	root.add_child(sim)
+	sim.setup(arena, {"frag_limit": 50})
+	for i in 3:
+		sim.add_bot(2)  # hard bots are the most active
+	var start := {}
+	var moved := {}
+	for id in sim.players:
+		start[id] = sim.players[id].body.global_position
+		moved[id] = 0.0
+	var saw_bot_fire := false
+	var saw_bot_damage := false
+	for i in 600:  # 10 simulated seconds
+		await physics_frame
+		for id in sim.players:
+			var p: RefCounted = sim.players[id]
+			moved[id] = maxf(moved[id], start[id].distance_to(p.body.global_position))
+		for ev: Dictionary in sim.drain_events():
+			if ev["type"] == "fire":
+				saw_bot_fire = true
+			if ev["type"] == "damage":
+				saw_bot_damage = true
+	for id in moved:
+		_expect(moved[id] > 4.0, "bot %s roamed %.1f m" % [id, moved[id]])
+	_expect(saw_bot_fire, "bots opened fire")
+	_expect(saw_bot_damage, "bots landed damage")
+	var alive_or_respawning := true
+	for id in sim.players:
+		var p: RefCounted = sim.players[id]
+		if not p.alive and p.respawn_t < -1.0:
+			alive_or_respawning = false
+	_expect(alive_or_respawning, "no bot stuck dead")
 	sim.queue_free()
 	await process_frame
 

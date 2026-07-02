@@ -9,6 +9,10 @@ extends Node3D
 const SimPlayer := preload("res://sim/sim_player.gd")
 const SimMovement := preload("res://sim/sim_movement.gd")
 const SimWeapons := preload("res://sim/sim_weapons.gd")
+const NavService := preload("res://sim/nav_service.gd")
+const BotBrain := preload("res://bots/bot_brain.gd")
+
+const BOT_NAMES := ["Bolt", "Vector", "Prism", "Nova", "Quartz", "Zenith", "Onyx", "Flux"]
 
 const PLAYER_LAYER := 2
 const WORLD_LAYER := 1
@@ -30,6 +34,8 @@ var _spawn_cursor := 0
 var _projectiles: Dictionary = {}     # id -> {owner, weapon, pos, vel, ttl}
 var _next_proj_id := 0
 var _rng := RandomNumberGenerator.new()
+var _brains: Dictionary = {}          # bot id -> BotBrain
+var _nav: RefCounted
 
 # SIM runs its tick after intents are submitted (client priority < 0 < ours).
 func _ready() -> void:
@@ -41,7 +47,21 @@ func setup(arena: Node3D, config: Dictionary = {}) -> void:
 	_spawns = arena.get_spawn_points()
 	_jump_pads = arena.get_jump_pads()
 	frag_limit = config.get("frag_limit", 20)
+	_nav = NavService.new()
+	_nav.setup(arena)
 	running = true
+
+
+func get_spawn_points() -> Array:
+	return _spawns
+
+
+func add_bot(difficulty: int) -> String:
+	var idx := _brains.size()
+	var id := "bot_%d" % idx
+	add_player(id, BOT_NAMES[idx % BOT_NAMES.size()], true)
+	_brains[id] = BotBrain.new(self, _nav, id, difficulty)
+	return id
 
 
 func add_player(id: String, display_name: String, is_bot: bool) -> void:
@@ -84,6 +104,9 @@ func get_projectiles() -> Array:
 func _physics_process(dt: float) -> void:
 	if not running:
 		return
+	if not match_over:
+		for brain: RefCounted in _brains.values():
+			brain.tick(dt)
 	for p: RefCounted in players.values():
 		if p.alive:
 			p.invuln_t = maxf(p.invuln_t - dt, 0.0)
