@@ -14,8 +14,13 @@ const PLAYER_LAYER := 2
 const WORLD_LAYER := 1
 const KNOCKBACK_PER_DMG := 0.1        # m/s of impulse per point of (pre-halving) damage
 
+const RESPAWN_DELAY := 2.0
+const SPAWN_INVULN := 2.0
+
 var players: Dictionary = {}          # id -> SimPlayer
 var running := false
+var match_over := false
+var frag_limit := 20
 
 var _arena: Node3D
 var _spawns: Array = []
@@ -31,10 +36,11 @@ func _ready() -> void:
 	process_physics_priority = 10
 
 
-func setup(arena: Node3D) -> void:
+func setup(arena: Node3D, config: Dictionary = {}) -> void:
 	_arena = arena
 	_spawns = arena.get_spawn_points()
 	_jump_pads = arena.get_jump_pads()
+	frag_limit = config.get("frag_limit", 20)
 	running = true
 
 
@@ -80,10 +86,27 @@ func _physics_process(dt: float) -> void:
 		return
 	for p: RefCounted in players.values():
 		if p.alive:
+			p.invuln_t = maxf(p.invuln_t - dt, 0.0)
 			_move_player(p, dt)
 			_check_jump_pads(p)
-			_tick_weapon(p, dt)
+			if not match_over:
+				_tick_weapon(p, dt)
+		else:
+			p.respawn_t -= dt
+			if p.respawn_t <= 0.0 and not match_over:
+				_respawn(p)
 	_tick_projectiles(dt)
+
+
+## Scoreboard rows, best first.
+func get_scores() -> Array:
+	var rows := []
+	for p: RefCounted in players.values():
+		rows.append({"id": p.id, "name": p.display_name, "frags": p.frags,
+			"deaths": p.deaths, "is_bot": p.is_bot})
+	rows.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return a["frags"] > b["frags"] if a["frags"] != b["frags"] else a["deaths"] < b["deaths"])
+	return rows
 
 
 func _move_player(p: RefCounted, dt: float) -> void:
@@ -222,7 +245,7 @@ func _explode(pos: Vector3, owner_id: String, def: Dictionary, skip_id: String) 
 
 
 func _damage(target: RefCounted, attacker_id: String, amount: int, knock_dir: Vector3, knock: float) -> void:
-	if not target.alive or target.invuln_t > 0.0:
+	if not target.alive or target.invuln_t > 0.0 or match_over:
 		return
 	if knock > 0.0:
 		target.velocity += knock_dir * knock
@@ -233,13 +256,45 @@ func _damage(target: RefCounted, attacker_id: String, amount: int, knock_dir: Ve
 		_kill(target, attacker_id)
 
 
-## Minimal death (milestone 5 adds respawn, scoring, kill feed plumbing).
 func _kill(target: RefCounted, attacker_id: String) -> void:
 	target.alive = false
 	target.health = 0
+	target.deaths += 1
+	target.respawn_t = RESPAWN_DELAY
 	target.body.collision_layer = 0  # corpses don't block shots
+	var suicide: bool = attacker_id == target.id or attacker_id.is_empty()
+	var attacker_name := "the arena"
+	if suicide:
+		target.frags -= 1
+		attacker_name = target.display_name if attacker_id == target.id else attacker_name
+	elif players.has(attacker_id):
+		var attacker: RefCounted = players[attacker_id]
+		attacker.frags += 1
+		attacker_name = attacker.display_name
 	_events.append({"type": "death", "id": target.id, "attacker": attacker_id,
 		"pos": target.body.global_position})
+	_events.append({"type": "kill", "attacker": attacker_id, "victim": target.id,
+		"attacker_name": attacker_name, "victim_name": target.display_name,
+		"suicide": suicide})
+	if not suicide and players.has(attacker_id) and players[attacker_id].frags >= frag_limit:
+		_end_match()
+
+
+func _end_match() -> void:
+	match_over = true
+	_projectiles.clear()
+	_events.append({"type": "match_end", "scores": get_scores()})
+
+
+func _respawn(p: RefCounted) -> void:
+	p.health = 100
+	p.alive = true
+	p.ammo = SimWeapons.full_ammo()
+	p.weapon = 0
+	p.cooldown = 0.0
+	p.invuln_t = SPAWN_INVULN
+	p.body.collision_layer = PLAYER_LAYER
+	_spawn(p)
 
 
 func _raycast(from: Vector3, to: Vector3, exclude_body: CharacterBody3D) -> Dictionary:
@@ -256,9 +311,30 @@ func _raycast_world(from: Vector3, to: Vector3) -> Dictionary:
 	return space.intersect_ray(q)
 
 
+## Prefer the spawn farthest from living enemies; fall back to rotation.
+func _pick_spawn(p: RefCounted) -> Vector3:
+	var enemies := []
+	for q: RefCounted in players.values():
+		if q.alive and q.id != p.id:
+			enemies.append(q.body.global_position)
+	if enemies.is_empty():
+		var spot: Vector3 = _spawns[_spawn_cursor % _spawns.size()]
+		_spawn_cursor += 1
+		return spot
+	var best: Vector3 = _spawns[0]
+	var best_d := -1.0
+	for spot: Vector3 in _spawns:
+		var d := INF
+		for e: Vector3 in enemies:
+			d = minf(d, spot.distance_to(e))
+		if d > best_d:
+			best_d = d
+			best = spot
+	return best
+
+
 func _spawn(p: RefCounted) -> void:
-	var spot: Vector3 = _spawns[_spawn_cursor % _spawns.size()]
-	_spawn_cursor += 1
+	var spot: Vector3 = _pick_spawn(p)
 	p.velocity = Vector3.ZERO
 	p.body.velocity = Vector3.ZERO
 	p.body.global_position = spot + Vector3(0, p.capsule_half_height() + 0.1, 0)

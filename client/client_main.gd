@@ -4,6 +4,7 @@ extends Node
 
 const CameraRig := preload("res://client/camera_rig.gd")
 const Fx := preload("res://client/fx.gd")
+const PlayerVisuals := preload("res://client/player_visuals.gd")
 
 const LOCAL_ID := "p1"
 
@@ -13,6 +14,7 @@ const LOCAL_ID := "p1"
 var rig: Node3D
 var camera: Camera3D
 var fx: Node3D
+var visuals: Node3D
 var yaw := 0.0
 var pitch := 0.0
 
@@ -21,7 +23,7 @@ func _ready() -> void:
 	process_physics_priority = -10  # intents land before the SIM tick
 	if not arena.baked:
 		await arena.ready_for_match
-	sim.setup(arena)
+	sim.setup(arena, {"frag_limit": GameConfig.frag_limit})
 	sim.add_player(LOCAL_ID, "You", false)
 	var p: RefCounted = sim.get_player(LOCAL_ID)
 	yaw = p.yaw
@@ -44,6 +46,10 @@ func _build_camera() -> void:
 	fx.camera = camera
 	fx.local_id = LOCAL_ID
 	get_parent().add_child.call_deferred(fx)
+	visuals = PlayerVisuals.new()
+	visuals.sim = sim
+	visuals.local_id = LOCAL_ID
+	get_parent().add_child.call_deferred(visuals)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -92,7 +98,13 @@ func _weapon_choice() -> int:
 func _on_sim_event(ev: Dictionary) -> void:
 	if fx != null:
 		fx.handle(ev)
+	if visuals != null:
+		visuals.handle(ev)
 	match ev["type"]:
 		"spawn":
 			if ev["id"] == LOCAL_ID and rig != null:
 				rig.reset_physics_interpolation()
+				# snap the view to the SIM's spawn-facing direction
+				var p: RefCounted = sim.get_player(LOCAL_ID)
+				yaw = p.yaw
+				pitch = p.pitch

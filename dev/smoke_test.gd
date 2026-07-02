@@ -64,6 +64,8 @@ func _run() -> void:
 
 	await _weapon_checks(arena)
 
+	await _combat_loop_checks(arena)
+
 	arena.queue_free()
 	await process_frame
 	await process_frame
@@ -159,6 +161,89 @@ func _weapon_checks(arena: Node3D) -> void:
 	sim.set_intent("a", _idle_intent())
 	_expect(max_vy > 9.0, "rocket jump vertical boost %.1f m/s" % max_vy)
 	_expect(a.health < 100 and a.alive, "rocket jump cost health (%d), survivable" % a.health)
+
+	sim.queue_free()
+	await process_frame
+
+
+func _combat_loop_checks(arena: Node3D) -> void:
+	print("=== smoke: combat loop ===")
+	var sim: Node3D = (load("res://sim/sim_world.gd") as GDScript).new()
+	root.add_child(sim)
+	sim.setup(arena, {"frag_limit": 2})
+	sim.add_player("a", "Attacker", true)
+	sim.add_player("b", "Victim", true)
+	var a: RefCounted = sim.get_player("a")
+	var b: RefCounted = sim.get_player("b")
+
+	# kill 1: B at 1 hp, one rifle burst
+	a.body.global_position = Vector3(10, 1.0, -2)
+	b.body.global_position = Vector3(10, 1.0, -8)
+	b.health = 1
+	sim.set_intent("b", _idle_intent())
+	var fire := _idle_intent()
+	fire["fire"] = true
+	sim.set_intent("a", fire)
+	var saw_kill := false
+	var saw_death := false
+	for i in 30:
+		await physics_frame
+		for ev: Dictionary in sim.drain_events():
+			if ev["type"] == "kill" and ev["victim"] == "b":
+				saw_kill = true
+			if ev["type"] == "death" and ev["id"] == "b":
+				saw_death = true
+	sim.set_intent("a", _idle_intent())
+	_expect(saw_death and saw_kill, "death + kill feed events emitted")
+	_expect(not b.alive, "victim died")
+	_expect(a.frags == 1, "attacker scored (frags %d)" % a.frags)
+	_expect(b.deaths == 1, "victim death counted")
+	_expect(b.body.collision_layer == 0, "corpse stops blocking shots")
+
+	# respawn: ~2 s later B is back, protected, and refilled
+	for i in 140:
+		await physics_frame
+	_expect(b.alive, "victim respawned")
+	_expect(b.health == 100, "respawn restored health")
+	_expect(b.invuln_t > 0.0, "respawn invulnerability active")
+	var far_from_a: float = b.body.global_position.distance_to(a.body.global_position)
+	_expect(far_from_a > 15.0, "respawn picked far spawn (%.1f m away)" % far_from_a)
+
+	# invuln blocks damage: bring both to open floor, shoot B immediately
+	b.body.global_position = Vector3(10, 1.0, -8)
+	b.velocity = Vector3.ZERO
+	a.body.global_position = Vector3(10, 1.0, -2)
+	a.velocity = Vector3.ZERO
+	var at_b := _idle_intent()
+	at_b["fire"] = true  # yaw 0 faces -Z, straight at B
+	sim.set_intent("a", at_b)
+	for i in 12:
+		await physics_frame
+	sim.set_intent("a", _idle_intent())
+	_expect(b.health == 100, "invuln blocked damage (hp %d)" % b.health)
+
+	# frag limit 2 ends the match
+	for i in 130:
+		await physics_frame  # let invuln lapse
+	b.health = 1
+	b.body.global_position = Vector3(10, 1.0, -8)
+	b.velocity = Vector3.ZERO
+	a.body.global_position = Vector3(10, 1.0, -2)
+	a.velocity = Vector3.ZERO
+	sim.set_intent("a", at_b)
+	var saw_end := false
+	var end_scores: Array = []
+	for i in 40:
+		await physics_frame
+		for ev: Dictionary in sim.drain_events():
+			if ev["type"] == "match_end":
+				saw_end = true
+				end_scores = ev["scores"]
+	sim.set_intent("a", _idle_intent())
+	_expect(saw_end, "match_end at frag limit")
+	_expect(sim.match_over, "sim froze combat")
+	_expect(end_scores.size() == 2 and end_scores[0]["id"] == "a" and end_scores[0]["frags"] == 2,
+		"scores sorted, winner 'a' with 2 frags")
 
 	sim.queue_free()
 	await process_frame
