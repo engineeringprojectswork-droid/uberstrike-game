@@ -60,7 +60,99 @@ func _run() -> void:
 	_expect(path.size() >= 2 and path[path.size() - 1].distance_to(Vector3(19, 4, 14)) < 2.0,
 		"path ground->E deck (%d points)" % path.size())
 
+	await _movement_checks(arena)
+
+	arena.queue_free()
+	await process_frame
+	await process_frame
+	await _match_scene_check()
+
 	print("=== smoke: %s ===" % ("FAIL (%d)" % _fails if _fails > 0 else "PASS"))
+
+
+func _match_scene_check() -> void:
+	print("=== smoke: match scene ===")
+	var m: Node = (load("res://scenes/match.tscn") as PackedScene).instantiate()
+	root.add_child(m)
+	for i in 60:
+		await physics_frame
+	var sim: Node = m.get_node("SimWorld")
+	_expect(sim.running, "match scene: sim running")
+	_expect(sim.get_player("p1") != null, "match scene: local player present")
+	m.queue_free()
+
+
+func _movement_checks(arena: Node3D) -> void:
+	print("=== smoke: movement ===")
+	var sim: Node3D = (load("res://sim/sim_world.gd") as GDScript).new()
+	root.add_child(sim)
+	sim.setup(arena)
+	sim.add_player("t1", "Tester", true)
+	var p: RefCounted = sim.get_player("t1")
+
+	# ground run: teleport to open floor, face -Z, hold forward 120 ticks
+	p.body.global_position = Vector3(10, 1.0, -2)
+	var intent := {"move": Vector2(0, 1), "yaw": 0.0, "pitch": 0.0,
+		"jump": false, "crouch": false, "fire": false, "weapon": -1}
+	sim.set_intent("t1", intent)
+	for i in 120:
+		await physics_frame
+	var pos: Vector3 = p.body.global_position
+	_expect(pos.z < -13.0, "ground run covered %.1f m in 2 s" % (-2.0 - pos.z))
+	_expect(absf(pos.x - 10.0) < 0.5, "ground run stayed on line (x drift %.2f)" % absf(pos.x - 10.0))
+	var ground_speed: float = Vector2(p.velocity.x, p.velocity.z).length()
+	_expect(absf(ground_speed - 8.13) < 0.5, "ground speed %.2f ~ 8.13 m/s cap" % ground_speed)
+
+	# jump: apex must clear ~1.1 m
+	sim.set_intent("t1", {"move": Vector2.ZERO, "yaw": 0.0, "pitch": 0.0,
+		"jump": true, "crouch": false, "fire": false, "weapon": -1})
+	var start_y: float = p.feet_pos().y
+	var apex := start_y
+	for i in 45:
+		await physics_frame
+		apex = maxf(apex, p.feet_pos().y)
+	_expect(apex - start_y > 0.9, "jump apex +%.2f m" % (apex - start_y))
+
+	# auto bunny-hop: hold jump+forward, speed must stay at/above the ground cap
+	p.body.global_position = Vector3(10, 1.0, 18)
+	p.velocity = Vector3.ZERO
+	p.body.velocity = Vector3.ZERO
+	sim.set_intent("t1", {"move": Vector2(0, 1), "yaw": 0.0, "pitch": 0.0,
+		"jump": true, "crouch": false, "fire": false, "weapon": -1})
+	var hops := 0
+	var last_floor := true
+	for i in 200:
+		await physics_frame
+		var on_floor: bool = p.body.is_on_floor()
+		if on_floor and not last_floor:
+			hops += 1
+		last_floor = on_floor
+	var hop_speed: float = Vector2(p.velocity.x, p.velocity.z).length()
+	_expect(hops >= 3, "bunny-hopped %d times" % hops)
+	_expect(hop_speed >= 7.7, "bunny-hop kept speed %.2f m/s" % hop_speed)
+
+	# jump pad: stand on the crown pad, expect a big vertical launch
+	p.body.global_position = Vector3(0, 3.0 + 1.0, 0)
+	p.velocity = Vector3.ZERO
+	p.body.velocity = Vector3.ZERO
+	sim.set_intent("t1", SimPlayerIntent())
+	var pad_apex := 0.0
+	var saw_pad_event := false
+	for i in 90:
+		await physics_frame
+		pad_apex = maxf(pad_apex, p.feet_pos().y)
+		for ev: Dictionary in sim.drain_events():
+			if ev["type"] == "jump_pad":
+				saw_pad_event = true
+	_expect(saw_pad_event, "jump pad event fired")
+	_expect(pad_apex > 7.5, "jump pad apex %.1f m" % pad_apex)
+
+	sim.queue_free()
+
+
+func SimPlayerIntent() -> Dictionary:
+	return {"move": Vector2.ZERO, "yaw": 0.0, "pitch": 0.0,
+		"jump": false, "crouch": false, "fire": false, "weapon": -1}
 
 
 func _sample_height(arena: Node3D, at: Vector3) -> float:
