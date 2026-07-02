@@ -7,6 +7,10 @@ var _bot_label: Label
 
 
 func _ready() -> void:
+	if GameConfig.is_server_mode():
+		# `game.exe --headless -- --server [--bots=N ...]` boots the headless SIM
+		get_tree().change_scene_to_file.call_deferred("res://scenes/server_main.tscn")
+		return
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 
