@@ -5,6 +5,9 @@ extends Node
 const CameraRig := preload("res://client/camera_rig.gd")
 const Fx := preload("res://client/fx.gd")
 const PlayerVisuals := preload("res://client/player_visuals.gd")
+const Hud := preload("res://client/hud.gd")
+const PauseMenu := preload("res://client/pause_menu.gd")
+const Summary := preload("res://client/summary.gd")
 
 const LOCAL_ID := "p1"
 
@@ -15,6 +18,10 @@ var rig: Node3D
 var camera: Camera3D
 var fx: Node3D
 var visuals: Node3D
+var hud: CanvasLayer
+var pause_menu: CanvasLayer
+var summary: CanvasLayer
+var match_ended := false
 var yaw := 0.0
 var pitch := 0.0
 
@@ -52,16 +59,23 @@ func _build_camera() -> void:
 	visuals.sim = sim
 	visuals.local_id = LOCAL_ID
 	get_parent().add_child.call_deferred(visuals)
+	hud = Hud.new()
+	hud.sim = sim
+	hud.local_id = LOCAL_ID
+	get_parent().add_child.call_deferred(hud)
+	pause_menu = PauseMenu.new()
+	get_parent().add_child.call_deferred(pause_menu)
+	summary = Summary.new()
+	summary.local_id = LOCAL_ID
+	get_parent().add_child.call_deferred(summary)
 
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		yaw = wrapf(yaw - event.relative.x * GameConfig.mouse_sensitivity, -PI, PI)
 		pitch = clampf(pitch - event.relative.y * GameConfig.mouse_sensitivity, -PI / 2 + 0.01, PI / 2 - 0.01)
-	elif event.is_action_pressed("pause"):
-		# temporary until the milestone-7 pause menu
-		var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
-		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE if captured else Input.MOUSE_MODE_CAPTURED)
+	elif event.is_action_pressed("pause") and not match_ended and pause_menu != null:
+		pause_menu.open()
 
 
 func _process(_dt: float) -> void:
@@ -73,7 +87,7 @@ func _process(_dt: float) -> void:
 
 
 func _physics_process(_dt: float) -> void:
-	if not sim.running:
+	if not sim.running or match_ended:
 		return
 	var move := Vector2(
 		Input.get_axis("move_left", "move_right"),
@@ -102,7 +116,16 @@ func _on_sim_event(ev: Dictionary) -> void:
 		fx.handle(ev)
 	if visuals != null:
 		visuals.handle(ev)
+	if hud != null:
+		hud.handle(ev)
 	match ev["type"]:
+		"match_end":
+			match_ended = true
+			GameConfig.last_match_result = {"scores": ev["scores"]}
+			sim.set_intent(LOCAL_ID, {"move": Vector2.ZERO, "yaw": yaw, "pitch": pitch,
+				"jump": false, "crouch": false, "fire": false, "weapon": -1})
+			if summary != null:
+				summary.show_results(ev["scores"])
 		"spawn":
 			if ev["id"] == LOCAL_ID and rig != null:
 				rig.reset_physics_interpolation()

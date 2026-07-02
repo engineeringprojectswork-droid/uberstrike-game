@@ -295,6 +295,14 @@ func _idle_intent() -> Dictionary:
 
 func _match_scene_check() -> void:
 	print("=== smoke: match scene ===")
+	var menu: Node = (load("res://scenes/main_menu.tscn") as PackedScene).instantiate()
+	root.add_child(menu)
+	await process_frame
+	await process_frame
+	_expect(menu.find_child("PlayButton", true, false) != null, "menu built with Play button")
+	_expect(menu.find_child("QuitButton", true, false) != null, "menu built with Quit button")
+	menu.queue_free()
+
 	var m: Node = (load("res://scenes/match.tscn") as PackedScene).instantiate()
 	root.add_child(m)
 	for i in 60:
@@ -302,6 +310,11 @@ func _match_scene_check() -> void:
 	var sim: Node = m.get_node("SimWorld")
 	_expect(sim.running, "match scene: sim running")
 	_expect(sim.get_player("p1") != null, "match scene: local player present")
+	# autoloads exist at runtime but aren't compile-time globals in --script mode
+	var game_config: Node = root.get_node("/root/GameConfig")
+	var expected: int = 1 + game_config.bot_count
+	_expect(sim.players.size() == expected,
+		"match scene: %d players (1 human + %d bots)" % [sim.players.size(), game_config.bot_count])
 	m.queue_free()
 
 
